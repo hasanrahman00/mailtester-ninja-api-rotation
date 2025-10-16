@@ -1,0 +1,27 @@
+{
+  "name": "mailtester-key-manager",
+  "version": "1.0.0",
+  "description": "MailTester Key Manager Microservice",
+  "main": "apiServer.js",
+  "scripts": {
+      "start": "node -r dotenv/config server.js dotenv_config_path=./.env",
+  "dev": "nodemon -r dotenv/config server.js dotenv_config_path=./.env"
+  },
+  "dependencies": {
+    "axios": "^1.6.7",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "node-cron": "^3.0.2",
+    "redis": "^4.6.7",
+    "winston": "^3.9.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT"
+}
