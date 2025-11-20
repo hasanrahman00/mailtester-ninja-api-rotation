@@ -3,18 +3,18 @@
  *
  * Defines REST endpoints for interacting with MailTester subscription keys.
  * Routes include:
- *   - GET /key/available – obtain an available key within rate limits
- *   - GET /status – list status and counters for all keys
- *   - POST /keys – register or update a key
- *   - DELETE /keys/:id – remove a key
+ *   - GET /key/available - obtain an available key within rate limits
+ *   - GET /status - list status and counters for all keys
+ *   - POST /keys - register or update a key
+ *   - DELETE /keys/:id - remove a key
  *
  * Each handler delegates core logic to the keyManager and provides
  * comprehensive error handling and consistent JSON responses.
  */
 
 const express = require('express');
-const keyManager = require('../keyManager');
-const logger = require('../logger');
+const keyManager = require('../src/keyManager');
+const logger = require('../src/logger');
 
 const router = express.Router();
 

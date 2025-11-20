@@ -14,10 +14,10 @@ const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
 const express = require('express');
-const logger = require('./logger');
-const redisClient = require('./redisClient');
-const keyManager = require('./keyManager');
-const scheduler = require('./scheduler');
+const logger = require('./src/logger');
+const redisClient = require('./src/redisClient');
+const keyManager = require('./src/keyManager');
+const scheduler = require('./src/scheduler');
 const keysRoutes = require('./routes/keys');
 
 const app = express();
