@@ -30,9 +30,10 @@ function parseEnvFile(envPath) {
 
 function parseKeysFromEnv(envVars, envDir) {
   if (!envVars) {
-    return [];
+    return { keys: [], jsonPath: null };
   }
 
+  const result = { keys: [], jsonPath: null };
   const defaultPlan = String(envVars.MAILTESTER_DEFAULT_PLAN || 'ultimate').toLowerCase();
   const normalizePlan = (plan) => (String(plan || '').toLowerCase() === 'pro' ? 'pro' : 'ultimate');
 
@@ -41,6 +42,7 @@ function parseKeysFromEnv(envVars, envDir) {
   if (!rawJson && jsonPath) {
     try {
       const filePath = path.resolve(envDir || process.cwd(), jsonPath);
+      result.jsonPath = filePath;
       rawJson = fs.readFileSync(filePath, 'utf8');
     } catch (err) {
       logger.error({ msg: 'Failed to read MAILTESTER_KEYS_JSON_PATH for watcher', error: err.message, jsonPath });
@@ -63,7 +65,8 @@ function parseKeysFromEnv(envVars, envDir) {
     }
   }
   if (jsonKeys.length) {
-    return jsonKeys;
+    result.keys = jsonKeys;
+    return result;
   }
 
   const csvRaw = envVars.MAILTESTER_KEYS_WITH_PLAN || '';
@@ -77,7 +80,8 @@ function parseKeysFromEnv(envVars, envDir) {
       csvKeys.push({ id, plan: normalizePlan(planPart || defaultPlan) });
     }
     if (csvKeys.length) {
-      return csvKeys;
+      result.keys = csvKeys;
+      return result;
     }
   }
 
@@ -88,16 +92,17 @@ function parseKeysFromEnv(envVars, envDir) {
       .map((id) => id.trim())
       .filter(Boolean)
       .map((id) => ({ id, plan: normalizePlan(defaultPlan) }));
-    return listKeys;
+    result.keys = listKeys;
+    return result;
   }
 
-  return [];
+  return result;
 }
 
 async function performSync(envPath) {
   const envDir = path.dirname(envPath);
   const envVars = parseEnvFile(envPath);
-  const desiredKeys = parseKeysFromEnv(envVars, envDir);
+  const { keys: desiredKeys, jsonPath } = parseKeysFromEnv(envVars, envDir);
 
   const desiredMap = new Map();
   for (const key of desiredKeys) {
@@ -131,6 +136,8 @@ async function performSync(envPath) {
       logger.error({ msg: 'Watcher: failed to delete stale key', subscriptionId, error: err.message });
     }
   }
+
+  return { jsonPath };
 }
 
 async function startWatching(dotenvPath) {
@@ -141,10 +148,83 @@ async function startWatching(dotenvPath) {
   }
 
   let closed = false;
+  let jsonWatcher = null;
+  let watchedJsonPath = null;
+
+  const closeJsonWatcher = () => {
+    if (jsonWatcher) {
+      jsonWatcher.close();
+      jsonWatcher = null;
+      watchedJsonPath = null;
+    }
+  };
+
+  const ensureJsonWatcher = (nextPath) => {
+    if (closed) {
+      return;
+    }
+
+    if (!nextPath) {
+      if (watchedJsonPath) {
+        closeJsonWatcher();
+      }
+      return;
+    }
+
+    const resolved = path.resolve(nextPath);
+    if (watchedJsonPath === resolved && jsonWatcher) {
+      return;
+    }
+
+    closeJsonWatcher();
+    const triggerSync = (eventType) => {
+      if (eventType === 'change' || eventType === 'rename') {
+        debouncedSync();
+      }
+    };
+
+    const tryFileWatch = () => {
+      try {
+        jsonWatcher = fs.watch(resolved, (eventType) => triggerSync(eventType));
+        watchedJsonPath = resolved;
+        logger.info({ msg: 'Watcher: listening for key JSON changes', path: resolved });
+        return true;
+      } catch (err) {
+        return false;
+      }
+    };
+
+    const tryDirectoryWatch = () => {
+      const dir = path.dirname(resolved);
+      const targetName = path.basename(resolved);
+      try {
+        jsonWatcher = fs.watch(dir, (eventType, filename) => {
+          if (!filename || filename.toString() === targetName) {
+            triggerSync(eventType);
+          }
+        });
+        watchedJsonPath = resolved;
+        logger.info({ msg: 'Watcher: listening for key JSON directory changes', path: resolved });
+        return true;
+      } catch (err) {
+        logger.error({ msg: 'Watcher: failed to watch key JSON file', path: resolved, error: err.message });
+        return false;
+      }
+    };
+
+    if (!tryFileWatch()) {
+      tryDirectoryWatch();
+    }
+  };
+
   const runSync = () => {
-    performSync(absolutePath).catch((err) => {
-      logger.error({ msg: 'Watcher sync error', error: err.message });
-    });
+    performSync(absolutePath)
+      .then(({ jsonPath }) => {
+        ensureJsonWatcher(jsonPath);
+      })
+      .catch((err) => {
+        logger.error({ msg: 'Watcher sync error', error: err.message });
+      });
   };
 
   const debouncedSync = createDebounced(runSync, 250);
@@ -159,6 +239,7 @@ async function startWatching(dotenvPath) {
   const cleanup = async () => {
     if (closed) return;
     closed = true;
+    closeJsonWatcher();
     watcher.close();
   };
 
