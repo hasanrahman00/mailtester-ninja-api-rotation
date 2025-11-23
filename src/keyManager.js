@@ -12,11 +12,11 @@
  * subscription ID.  All operations funnel through this module to keep the
  * data model consistent.
  */
-const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const logger = require('./logger');
 const mongoClient = require('./mongoClient');
+const tokenManager = require('./tokenManager');
 
 const WINDOW_MS = 30_000;
 const DAY_MS = 86_400_000;
@@ -152,16 +152,17 @@ async function registerKey(subscriptionId, plan) {
   if (!subscriptionId) {
     throw new Error('subscriptionId is required');
   }
-  const limits = getRateLimits(plan);
+  const normalizedPlan = String(plan || 'ultimate').toLowerCase();
+  const limits = getRateLimits(normalizedPlan);
   const now = Date.now();
   const collection = await getKeysCollection();
   const existing = await collection.findOne({ subscriptionId });
   if (!existing) {
     const doc = {
       subscriptionId,
-      plan: plan.toLowerCase(),
+      plan: normalizedPlan,
       token: '',
-      lastRefresh: now,
+      lastRefresh: 0,
       usedInWindow: 0,
       windowStart: now,
       usedDaily: 0,
@@ -174,15 +175,19 @@ async function registerKey(subscriptionId, plan) {
     };
     await collection.insertOne(doc);
     logger.info({ msg: 'Registered new key', subscriptionId, plan: doc.plan });
+    await tokenManager.fetchAndStoreToken(subscriptionId);
   } else {
     const updates = {
-      plan: plan.toLowerCase(),
+      plan: normalizedPlan,
       rateLimit30s: limits.rateLimit30s,
       dailyLimit: limits.dailyLimit,
       avgRequestIntervalMs: limits.avgRequestIntervalMs
     };
     await collection.updateOne({ subscriptionId }, { $set: updates });
     logger.info({ msg: 'Updated existing key', subscriptionId, plan: updates.plan });
+    if (existing.plan !== normalizedPlan || !existing.token) {
+      await tokenManager.fetchAndStoreToken(subscriptionId);
+    }
   }
 }
 
@@ -306,30 +311,7 @@ async function getAvailableKey() {
  * @param {string} subscriptionId
  */
 async function refreshToken(subscriptionId) {
-  const collection = await getKeysCollection();
-  try {
-    const url = `https://token.mailtester.ninja/token?key=${encodeURIComponent(subscriptionId)}`;
-    const response = await axios.get(url, { timeout: 10000 });
-    if (response.status === 200 && response.data && response.data.token) {
-      const token = String(response.data.token);
-      await collection.updateOne(
-        { subscriptionId },
-        { $set: { token, lastRefresh: Date.now(), status: 'active' } }
-      );
-      logger.info({ msg: 'Refreshed token', subscriptionId });
-      return token;
-    }
-    logger.warn({ msg: 'Unexpected token refresh response', subscriptionId, status: response.status });
-    return null;
-  } catch (err) {
-    if (err.response && (err.response.status === 401 || err.response.status === 403)) {
-      await collection.updateOne({ subscriptionId }, { $set: { status: 'banned' } });
-      logger.warn({ msg: 'Key banned during token refresh', subscriptionId, status: err.response.status });
-    } else {
-      logger.error({ msg: 'Token refresh error', subscriptionId, error: err.message });
-    }
-    return null;
-  }
+  return tokenManager.fetchAndStoreToken(subscriptionId);
 }
 
 /**
