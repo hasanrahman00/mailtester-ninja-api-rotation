@@ -1,14 +1,13 @@
 # MailTester Key Manager Microservice
 
-This project implements a **MailTester Ninja API key manager** as a Node.js microservice. It centralises storage for any number of MailTester subscription IDs (keys), enforces MailTester rate limits, refreshes authentication tokens automatically, and exposes a REST API so that other services can obtain an available key on demand.
+This project implements a **MailTester Ninja API key manager** as a Node.js microservice. It centralises storage for any number of MailTester subscription IDs (keys), enforces MailTester rate limits, and exposes a REST API so that other services can obtain an available key on demand.
 
-The service runs continuously, performing scheduled maintenance jobs (token refreshes, window resets, daily resets, health checks, and `.env` synchronisation) while responding to HTTP traffic. Key metadata now lives in **MongoDB**, **Express** powers the HTTP server, and **node-cron** orchestrates recurring work.
+The service runs continuously, performing scheduled maintenance jobs (window resets, daily resets, health checks, and `.env` synchronisation) while responding to HTTP traffic. Key metadata now lives in **MongoDB**, **Express** powers the HTTP server, and **node-cron** orchestrates recurring work.
 
 ## Features
 
 - **Multiple key support:** register as many MailTester subscriptions as you like and load-balance requests automatically.
 - **Rate limiting:** enforces per-30-second and per-day limits for both Pro and Ultimate plans directly in MongoDB.
-- **Automatic token rotation:** fetches a new MailTester token every 24 hours (configurable via `REFRESH_INTERVAL_HOURS`).
 - **Usage tracking & persistence:** stores counters, statuses, and plan metadata in MongoDB for durability.
 - **`.env` watcher + health checker:** keeps runtime keys in sync with the `.env` file and removes dead keys automatically.
 - **REST API:** obtain an available key, inspect status, and add/remove keys at runtime.
@@ -44,7 +43,6 @@ mailtester-ninja-api-rotation/
    - `MONGODB_URI` – MongoDB connection string (Atlas or self-hosted).
    - `MONGODB_DB_NAME` – optional, defaults to `mailtester`.
    - `PORT` – HTTP port (defaults to `3000`).
-   - `REFRESH_INTERVAL_HOURS` – token refresh cadence (defaults to `24`).
 
    **Preloading keys** (set *one* input source, checked in the order shown):
 
@@ -73,11 +71,12 @@ Returns an available MailTester key while atomically incrementing its usage coun
 
 ```json
 {
-  "subscriptionId": "sub_abc123",
-  "token": "Mk5ETL…",
-  "plan": "ultimate"
+   "subscriptionId": "sub_abc123",
+   "plan": "ultimate"
 }
 ```
+
+Use the returned `subscriptionId` directly when calling `https://happy.mailtester.ninja/ninja`.
 
 ### `GET /status`
 
@@ -95,7 +94,6 @@ Removes a key document from MongoDB and stops it from being served.
 
 - **Window reset** (`*/30 * * * * *`): clears 30-second counters when the window elapses.
 - **Daily reset** (`* * * * *`): clears daily counters + reactivates exhausted keys once their 24-hour window passes.
-- **Token refresh** (`0 * * * *`): refreshes tokens for keys whose `lastRefresh` exceeds `REFRESH_INTERVAL_HOURS`.
 - **`.env` watcher:** keeps MongoDB keys aligned with the `.env` definitions.
 - **Key health checker** (`0 0 * * *` UTC): validates each key via the MailTester API, deletes failures, and removes them from `.env`.
 
@@ -107,10 +105,10 @@ All background work logs successes/errors and continues on failure to maintain a
 | --- | --- |
 | `server.js` | Loads `.env`, connects to MongoDB, initialises keys, starts schedulers + watchers, wires Express routes, and manages graceful shutdown. |
 | `src/mongoClient.js` | Wraps the official MongoDB driver, exposing `connectMongo()`, `disconnectMongo()`, and helpers to fetch collections. |
-| `src/keyManager.js` | Central business logic for keys: env initialisation, CRUD helpers, rate-limit enforcement, token refresh, counters, and MongoDB operations. |
+| `src/keyManager.js` | Central business logic for keys: env initialisation, CRUD helpers, rate-limit enforcement, counters, and MongoDB operations. |
 | `src/envWatcher.js` | Watches the `.env` file, re-parses key definitions, registers new keys, and deletes keys removed from `.env`. |
 | `src/keyHealthChecker.js` | Nightly cron that pings MailTester, deletes invalid keys from MongoDB, and cleans matching entries out of `.env`. |
-| `src/scheduler.js` | Registers cron jobs for window resets, daily resets, and token refreshes. |
+| `src/scheduler.js` | Registers cron jobs for window resets and daily resets. |
 | `routes/keys.js` | Express router implementing `/key/available`, `/status`, `/keys` (POST) and `/keys/:id` (DELETE). |
 | `src/logger.js` | Winston logger shared across the service. |
 
@@ -120,14 +118,13 @@ All background work logs successes/errors and continues on failure to maintain a
 | --- | --- |
 | `subscriptionId` | MailTester subscription ID (unique). |
 | `plan` | `pro` or `ultimate`. |
-| `token` | Most recent MailTester token. |
 | `status` | `active`, `exhausted`, or `banned`. |
 | `usedInWindow`, `windowStart` | 30-second rate limiting counters. |
 | `usedDaily`, `dayStart` | Daily quota counters. |
 | `rateLimit30s`, `dailyLimit`, `avgRequestIntervalMs` | Derived limits based on plan. |
-| `lastRefresh`, `lastUsed` | Token refresh + last usage timestamps. |
+| `lastUsed` | Timestamp of the most recent successful selection. |
 
-Counters reset automatically via schedulers, and exhausted keys flip back to `active` after the next daily reset. Tokens refresh through the MailTester `token` endpoint; HTTP 401/403 responses mark a key as `banned`.
+Counters reset automatically via schedulers, and exhausted keys flip back to `active` after the next daily reset.
 
 ## Example usage
 
@@ -136,14 +133,14 @@ const axios = require('axios');
 
 async function run() {
   const { data } = await axios.get('http://localhost:3000/key/available');
-  const response = await axios.get(`https://happy.mailtester.ninja/ninja?email=test@example.com&token=${data.token}`);
+   const response = await axios.get(`https://happy.mailtester.ninja/ninja?email=test@example.com&key=${data.subscriptionId}`);
   console.log(response.data);
 }
 
 run().catch(console.error);
 ```
 
-The microservice keeps tokens fresh, enforces limits, and balances across all configured subscriptions so downstream code can focus on MailTester requests.
+The microservice enforces limits and balances across all configured subscriptions so downstream code can focus on MailTester requests.
 
 ## License
 

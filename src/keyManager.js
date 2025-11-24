@@ -4,19 +4,17 @@
  * This module encapsulates all business logic related to MailTester
  * subscription keys.  It exposes functions to initialise keys from the
  * environment (or a JSON file), register new keys, delete keys, retrieve
- * status for all keys, select an available key respecting rate limits and
- * daily quotas, and refresh authentication tokens.
+ * status for all keys, and select an available key respecting rate limits and
+ * daily quotas.
  *
  * Key metadata is stored in MongoDB (collection: `keys`).  Each document
- * contains the plan, counters, rate limits and current token for a
- * subscription ID.  All operations funnel through this module to keep the
- * data model consistent.
+ * contains the plan, counters, and rate limits for a subscription ID.  All
+ * operations funnel through this module to keep the data model consistent.
  */
 const fs = require('fs');
 const path = require('path');
 const logger = require('./logger');
 const mongoClient = require('./mongoClient');
-const tokenManager = require('./tokenManager');
 
 const WINDOW_MS = 30_000;
 const DAY_MS = 86_400_000;
@@ -44,6 +42,11 @@ function getRateLimits(plan) {
  * typically called once on server startup.
  */
 async function initializeKeysFromEnv() {
+  try {
+    await removeLegacyTokenFields();
+  } catch (err) {
+    logger.warn({ msg: 'Failed to remove legacy token fields', error: err.message });
+  }
   // Optionally load keys from an external JSON file.  If
   // MAILTESTER_KEYS_JSON_PATH is defined, the file at that path should
   // contain a JSON array of objects with the shape { id: string, plan: string }.
@@ -148,6 +151,14 @@ async function getKeysCollection() {
   return mongoClient.getKeysCollection();
 }
 
+async function removeLegacyTokenFields() {
+  const collection = await getKeysCollection();
+  await collection.updateMany(
+    { $or: [{ token: { $exists: true } }, { lastRefresh: { $exists: true } }] },
+    { $unset: { token: '', lastRefresh: '' } }
+  );
+}
+
 async function registerKey(subscriptionId, plan) {
   if (!subscriptionId) {
     throw new Error('subscriptionId is required');
@@ -161,8 +172,6 @@ async function registerKey(subscriptionId, plan) {
     const doc = {
       subscriptionId,
       plan: normalizedPlan,
-      token: '',
-      lastRefresh: 0,
       usedInWindow: 0,
       windowStart: now,
       usedDaily: 0,
@@ -175,7 +184,6 @@ async function registerKey(subscriptionId, plan) {
     };
     await collection.insertOne(doc);
     logger.info({ msg: 'Registered new key', subscriptionId, plan: doc.plan });
-    await tokenManager.fetchAndStoreToken(subscriptionId);
   } else {
     const updates = {
       plan: normalizedPlan,
@@ -183,11 +191,11 @@ async function registerKey(subscriptionId, plan) {
       dailyLimit: limits.dailyLimit,
       avgRequestIntervalMs: limits.avgRequestIntervalMs
     };
-    await collection.updateOne({ subscriptionId }, { $set: updates });
+    await collection.updateOne(
+      { subscriptionId },
+      { $set: updates, $unset: { token: '', lastRefresh: '' } }
+    );
     logger.info({ msg: 'Updated existing key', subscriptionId, plan: updates.plan });
-    if (existing.plan !== normalizedPlan || !existing.token) {
-      await tokenManager.fetchAndStoreToken(subscriptionId);
-    }
   }
 }
 
@@ -210,7 +218,7 @@ async function deleteKey(subscriptionId) {
 async function getAllKeysStatus() {
   const collection = await getKeysCollection();
   const docs = await collection.find().toArray();
-  return docs.map(({ _id, ...rest }) => rest);
+  return docs.map(({ _id, token, lastRefresh, ...rest }) => rest);
 }
 
 /**
@@ -219,7 +227,7 @@ async function getAllKeysStatus() {
  * `usedInWindow` counter is selected.  The selected key's counters are
  * incremented atomically using MongoDB compare-and-set semantics to mitigate race conditions.
  *
- * @returns {Promise<null|{subscriptionId: string, token: string, plan: string}>}
+ * @returns {Promise<null|{subscriptionId: string, plan: string}>}
  */
 async function getAvailableKey() {
   const collection = await getKeysCollection();
@@ -294,7 +302,6 @@ async function getAvailableKey() {
     if (result.value) {
       return {
         subscriptionId: result.value.subscriptionId,
-        token: result.value.token,
         plan: result.value.plan
       };
     }
@@ -303,38 +310,6 @@ async function getAvailableKey() {
   return null;
 }
 
-/**
- * Refresh a single key's token by calling the MailTester Ninja token endpoint.
- * If the call fails with a 4xx error the key is marked as banned.  On
- * success the `token` and `lastRefresh` fields are updated.
- *
- * @param {string} subscriptionId
- */
-async function refreshToken(subscriptionId) {
-  return tokenManager.fetchAndStoreToken(subscriptionId);
-}
-
-/**
- * Iterate all keys and refresh tokens as needed.  A token is refreshed when
- * the elapsed time since its last refresh is greater than the configured
- * REFRESH_INTERVAL_HOURS environment variable (defaults to 24h).  This
- * function is called periodically by the scheduler.
- */
-async function refreshTokensForAll() {
-  const refreshHours = parseInt(process.env.REFRESH_INTERVAL_HOURS || '24', 10);
-  const intervalMs = refreshHours * 60 * 60 * 1000;
-  const now = Date.now();
-  const collection = await getKeysCollection();
-  const docs = await collection.find().toArray();
-  for (const doc of docs) {
-    if (doc.status === 'banned') {
-      continue;
-    }
-    if (now - (doc.lastRefresh || 0) >= intervalMs) {
-      await refreshToken(doc.subscriptionId);
-    }
-  }
-}
 
 /**
  * Reset the per-30-second window counter for all keys whose window has
@@ -380,8 +355,6 @@ module.exports = {
   deleteKey,
   getAllKeysStatus,
   getAvailableKey,
-  refreshToken,
-  refreshTokensForAll,
   resetWindowsForAll,
   resetDailyForAll
 };
