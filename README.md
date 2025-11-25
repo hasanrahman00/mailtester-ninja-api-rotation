@@ -101,59 +101,6 @@ Registers or updates a key. Body must include `subscriptionId` (or `id`) and `pl
 
 Removes a key document from MongoDB and stops it from being served.
 
-### `POST /results`
-
-Records an email validation outcome that a downstream service observed directly from MailTester. This lets you keep centralised usage metrics even when MailTester is called without proxying through this service.
-
-```json
-{
-   "subscriptionId": "sub_abc123",
-   "email": "user@example.com",
-   "code": "ok",
-   "message": "Mailbox is accepting mail",
-   "durationMs": 742,
-   "metadata": {
-      "source": "email-enricher"
-   }
-}
-```
-
-Responds with `202` when the result is accepted. If the subscription ID is unknown you receive `404`.
-
-### `GET /stats`
-
-Returns aggregated validation metrics grouped per subscription along with a global summary:
-
-```json
-{
-   "summary": {
-      "total": 1250,
-      "byCode": {
-         "ok": 1100,
-         "catch_all": 120,
-         "unknown": 30
-      }
-   },
-   "keys": [
-      {
-         "subscriptionId": "sub_abc123",
-         "plan": "ultimate",
-         "total": 800,
-         "byCode": {
-            "ok": 750,
-            "catch_all": 40,
-            "unknown": 10
-         },
-         "lastResult": {
-            "email": "user@example.com",
-            "code": "ok",
-            "timestamp": 1700000000000
-         }
-      }
-   ]
-}
-```
-
 ## Scheduler & background jobs
 
 - **Window reset** (`*/30 * * * * *`): clears 30-second counters when the window elapses.
@@ -173,7 +120,7 @@ All background work logs successes/errors and continues on failure to maintain a
 | `src/envWatcher.js` | Watches the `.env` file, re-parses key definitions, registers new keys, and deletes keys removed from `.env`. |
 | `src/keyHealthChecker.js` | Nightly cron that pings MailTester, deletes invalid keys from MongoDB, and cleans matching entries out of `.env`. |
 | `src/scheduler.js` | Registers cron jobs for window resets and daily resets. |
-| `routes/keys.js` | Express router implementing `/key/available`, `/status`, `/results`, `/stats`, `/keys` (POST) and `/keys/:id` (DELETE). |
+| `routes/keys.js` | Express router implementing `/key/available`, `/status`, `/keys` (POST) and `/keys/:id` (DELETE). |
 | `src/keyQueue.js` | BullMQ queue + worker that buffers `/key/available` calls and retries until a key is free. |
 | `src/redis.js` | Factory for BullMQ Redis connections (URL or host/port/password inputs). |
 | `src/logger.js` | Winston logger shared across the service. |
@@ -189,7 +136,6 @@ All background work logs successes/errors and continues on failure to maintain a
 | `usedDaily`, `dayStart` | Daily quota counters. |
 | `rateLimit30s`, `dailyLimit`, `avgRequestIntervalMs` | Derived limits based on plan. |
 | `lastUsed` | Timestamp of the most recent successful selection. |
-| `validationStats` | Aggregated telemetry: totals, per-code counts, and the last reported result. |
 
 Counters reset automatically via schedulers, and exhausted keys flip back to `active` after the next daily reset.
 

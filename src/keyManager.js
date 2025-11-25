@@ -180,13 +180,7 @@ async function registerKey(subscriptionId, plan) {
       rateLimit30s: limits.rateLimit30s,
       dailyLimit: limits.dailyLimit,
       avgRequestIntervalMs: limits.avgRequestIntervalMs,
-      lastUsed: 0,
-      validationStats: {
-        total: 0,
-        byCode: {},
-        lastResult: null,
-        lastUpdated: 0
-      }
+      lastUsed: 0
     };
     await collection.insertOne(doc);
     logger.info({ msg: 'Registered new key', subscriptionId, plan: doc.plan });
@@ -364,93 +358,6 @@ async function resetDailyForAll() {
   }
 }
 
-function normalizeValidationCode(rawCode) {
-  const code = String(rawCode || 'unknown').trim().toLowerCase();
-  return code.replace(/[^a-z0-9_-]/g, '_') || 'unknown';
-}
-
-function buildLastResult({ email, code, message, durationMs, metadata }) {
-  const result = {
-    email: email || null,
-    code: code || null,
-    message: message || null,
-    timestamp: Date.now()
-  };
-  if (Number.isFinite(durationMs)) {
-    result.durationMs = Number(durationMs);
-  }
-  if (metadata && typeof metadata === 'object') {
-    result.metadata = metadata;
-  }
-  return result;
-}
-
-async function recordValidationResult({ subscriptionId, email, code, message, durationMs, metadata }) {
-  if (!subscriptionId) {
-    throw new Error('subscriptionId is required to record a result');
-  }
-  const collection = await getKeysCollection();
-  const safeCode = normalizeValidationCode(code);
-  const incPaths = {
-    'validationStats.total': 1,
-    [`validationStats.byCode.${safeCode}`]: 1
-  };
-  const lastResult = buildLastResult({ email, code, message, durationMs, metadata });
-  const update = {
-    $inc: incPaths,
-    $set: {
-      'validationStats.lastResult': lastResult,
-      'validationStats.lastUpdated': lastResult.timestamp
-    }
-  };
-  if (email) {
-    update.$set['validationStats.lastEmail'] = email;
-  }
-  if (code) {
-    update.$set['validationStats.lastCode'] = code;
-  }
-
-  const result = await collection.updateOne({ subscriptionId }, update);
-  if (!result.matchedCount) {
-    return false;
-  }
-  return true;
-}
-
-async function getValidationStatsSummary() {
-  const collection = await getKeysCollection();
-  const docs = await collection
-    .find()
-    .project({ _id: 0, subscriptionId: 1, plan: 1, validationStats: 1 })
-    .toArray();
-
-  const summary = { total: 0, byCode: {} };
-  const keys = [];
-
-  const bumpSummary = (byCode = {}) => {
-    for (const [code, count] of Object.entries(byCode)) {
-      summary.byCode[code] = (summary.byCode[code] || 0) + count;
-    }
-  };
-
-  for (const doc of docs) {
-    const stats = doc.validationStats || {};
-    const entry = {
-      subscriptionId: doc.subscriptionId,
-      plan: doc.plan,
-      total: stats.total || 0,
-      byCode: stats.byCode || {},
-      lastResult: stats.lastResult || null,
-      lastUpdated: stats.lastUpdated || null
-    };
-    keys.push(entry);
-    summary.total += entry.total;
-    bumpSummary(entry.byCode);
-  }
-
-  return { summary, keys };
-}
-
 module.exports = {
   initializeKeysFromEnv,
   registerKey,
@@ -458,7 +365,5 @@ module.exports = {
   getAllKeysStatus,
   getAvailableKey,
   resetWindowsForAll,
-  resetDailyForAll,
-  recordValidationResult,
-  getValidationStatsSummary
+  resetDailyForAll
 };

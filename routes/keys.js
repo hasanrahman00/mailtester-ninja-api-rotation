@@ -5,8 +5,6 @@
  * Routes include:
  *   - GET /key/available - obtain an available key within rate limits
  *   - GET /status - list status and counters for all keys
- *   - POST /results - record a validation outcome pushed from clients
- *   - GET /stats - aggregate validation stats for reporting
  *   - POST /keys - register or update a key
  *   - DELETE /keys/:id - remove a key
  *
@@ -69,52 +67,6 @@ router.get('/status', async (req, res) => {
     return res.json(status);
   } catch (err) {
     logger.error({ msg: 'Error in /status', error: err.message });
-    return res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-/**
- * POST /results
- *
- * Allows downstream services to report the outcome of an email validation run
- * so we can track usage even when the proxy is bypassed.
- */
-router.post('/results', async (req, res) => {
-  const { subscriptionId, id, email, code, message, durationMs, metadata } = req.body || {};
-  const subId = (subscriptionId || id || '').trim();
-  if (!subId) {
-    return res.status(400).json({ error: 'subscriptionId or id is required' });
-  }
-  try {
-    const recorded = await keyManager.recordValidationResult({
-      subscriptionId: subId,
-      email,
-      code,
-      message,
-      durationMs,
-      metadata
-    });
-    if (!recorded) {
-      return res.status(404).json({ error: `Subscription ${subId} not found` });
-    }
-    return res.status(202).json({ message: 'Result recorded' });
-  } catch (err) {
-    logger.error({ msg: 'Error in POST /results', error: err.message });
-    return res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-/**
- * GET /stats
- *
- * Returns aggregated validation metrics (per-key and global totals).
- */
-router.get('/stats', async (req, res) => {
-  try {
-    const stats = await keyManager.getValidationStatsSummary();
-    return res.json(stats);
-  } catch (err) {
-    logger.error({ msg: 'Error in /stats', error: err.message });
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
