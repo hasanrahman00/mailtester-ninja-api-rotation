@@ -10,6 +10,7 @@ The service runs continuously, performing scheduled maintenance jobs (window res
 - **Rate limiting:** enforces per-30-second and per-day limits for both Pro and Ultimate plans directly in MongoDB.
 - **Usage tracking & persistence:** stores counters, statuses, and plan metadata in MongoDB for durability.
 - **`.env` watcher + health checker:** keeps runtime keys in sync with the `.env` file and removes dead keys automatically.
+- **BullMQ-powered queue:** buffers bursts of `/key/available` requests in Redis so callers wait their turn instead of being rejected while keys cool down.
 - **REST API:** obtain an available key, inspect status, add/remove keys, and push validation telemetry for analytics.
 - **Structured logging & graceful shutdown:** consistent JSON logging with clean teardown of schedulers, watchers, and DB connections.
 
@@ -23,6 +24,8 @@ mailtester-ninja-api-rotation/
 │   └── keys.js               # REST routes
 └── src/
     ├── keyManager.js        # Business logic + Mongo persistence
+   ├── keyQueue.js          # BullMQ queue + worker
+   ├── redis.js             # Redis connection helper
     ├── mongoClient.js       # MongoDB connection helper
     ├── scheduler.js         # node-cron jobs
     ├── envWatcher.js        # Watches .env and syncs keys
@@ -43,6 +46,14 @@ mailtester-ninja-api-rotation/
    - `MONGODB_URI` – MongoDB connection string (Atlas or self-hosted).
    - `MONGODB_DB_NAME` – optional, defaults to `mailtester`.
    - `PORT` – HTTP port (defaults to `3000`).
+   - `REDIS_URL` – Redis connection string used by BullMQ (e.g. `redis://user:pass@host:port`). If omitted, set `REDIS_HOST`, `REDIS_PORT`, and optional `REDIS_PASSWORD`.
+
+   **Queue tuning (optional):**
+
+   - `KEY_QUEUE_CONCURRENCY` – how many jobs BullMQ processes in parallel (default `5`).
+   - `KEY_QUEUE_BACKOFF_MS` – delay between retries while waiting for a free key (default `1000`).
+   - `KEY_QUEUE_MAX_WAIT_MS` – max time (ms) a worker retries before giving up; set `0`/unset (default) to wait indefinitely.
+   - `KEY_QUEUE_REQUEST_TIMEOUT_MS` – optional HTTP wait timeout (ms). Leave unset/`0` to keep the connection open until a key is available.
 
    **Preloading keys** (set *one* input source, checked in the order shown):
 
@@ -67,7 +78,7 @@ All endpoints return JSON and live at the root path.
 
 ### `GET /key/available`
 
-Returns an available MailTester key while atomically incrementing its usage counters inside MongoDB. Responds with `429` when every key is at capacity.
+Enqueues the caller inside a BullMQ queue, then returns the next available MailTester key while atomically incrementing its usage counters in MongoDB. If you configure an HTTP timeout and it elapses while every key is still cooling down, the route responds with `429 { status: "wait" }`; otherwise the connection remains open until a key frees up.
 
 ```json
 {
@@ -163,6 +174,8 @@ All background work logs successes/errors and continues on failure to maintain a
 | `src/keyHealthChecker.js` | Nightly cron that pings MailTester, deletes invalid keys from MongoDB, and cleans matching entries out of `.env`. |
 | `src/scheduler.js` | Registers cron jobs for window resets and daily resets. |
 | `routes/keys.js` | Express router implementing `/key/available`, `/status`, `/results`, `/stats`, `/keys` (POST) and `/keys/:id` (DELETE). |
+| `src/keyQueue.js` | BullMQ queue + worker that buffers `/key/available` calls and retries until a key is free. |
+| `src/redis.js` | Factory for BullMQ Redis connections (URL or host/port/password inputs). |
 | `src/logger.js` | Winston logger shared across the service. |
 
 ## Key data model (MongoDB `keys` collection)

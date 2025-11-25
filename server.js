@@ -20,6 +20,7 @@ const keyManager = require('./src/keyManager');
 const scheduler = require('./src/scheduler');
 const envWatcher = require('./src/envWatcher');
 const keyHealthChecker = require('./src/keyHealthChecker');
+const { shutdownKeyQueue } = require('./src/keyQueue');
 const keysRoutes = require('./routes/keys');
 
 const app = express();
@@ -73,6 +74,11 @@ async function start() {
           await stopHealthChecker();
         } catch (err) {
           logger.error({ msg: 'Error stopping key health checker', error: err.message });
+        }
+        try {
+          await shutdownKeyQueue();
+        } catch (err) {
+          logger.error({ msg: 'Error shutting down key queue', error: err.message });
         }
         process.exit(0);
       });

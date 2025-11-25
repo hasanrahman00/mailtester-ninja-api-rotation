@@ -17,8 +17,10 @@
 const express = require('express');
 const keyManager = require('../src/keyManager');
 const logger = require('../src/logger');
+const { keyQueue, keyQueueEvents } = require('../src/keyQueue');
 
 const router = express.Router();
+const KEY_QUEUE_REQUEST_TIMEOUT_MS = Number(process.env.KEY_QUEUE_REQUEST_TIMEOUT_MS || 0);
 
 /**
  * GET /key/available
@@ -29,14 +31,29 @@ const router = express.Router();
  */
 router.get('/key/available', async (req, res) => {
   try {
-    const key = await keyManager.getAvailableKey();
-    if (!key) {
-      // no key available
-      return res.status(429).json({ status: 'wait', retryIn: 3000, message: 'All keys busy' });
-    }
+    const job = await keyQueue.add(
+      'reserve-key',
+      {},
+      {
+        removeOnComplete: true,
+        removeOnFail: false
+      }
+    );
+
+    const key = KEY_QUEUE_REQUEST_TIMEOUT_MS > 0
+      ? await job.waitUntilFinished(keyQueueEvents, KEY_QUEUE_REQUEST_TIMEOUT_MS)
+      : await job.waitUntilFinished(keyQueueEvents);
     return res.json(key);
   } catch (err) {
-    logger.error({ msg: 'Error in /key/available', error: err.message });
+    if (err && err.message) {
+      if (err.message.includes('timed out')) {
+        return res.status(429).json({ status: 'wait', retryIn: 3000, message: 'Queue busy' });
+      }
+      if (err.message === 'QUEUE_TIMEOUT') {
+        return res.status(429).json({ status: 'wait', retryIn: 3000, message: 'All keys busy' });
+      }
+    }
+    logger.error({ msg: 'Error in /key/available', error: err?.message || err });
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
