@@ -196,3 +196,8 @@ To rotate MailTester keys, edit `deploy/keys.json`, commit, and push. The workfl
 ## License
 
 MIT
+
+Production endpoints:
+- https://api.daddy-leads.com/mailtester/health
+- https://api.daddy-leads.com/mailtester/key/available
+- https://api.daddy-leads.com/mailtester/status
