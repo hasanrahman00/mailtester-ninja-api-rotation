@@ -4,7 +4,7 @@ services:
     container_name: mailtester-service
     restart: unless-stopped
     volumes:
-      - ./.env:/usr/src/app/.env:ro
+      - ./.env:/usr/src/app/.env
       - ./keys.json:/usr/src/app/deploy/keys.json:ro
     ports:
       - "8000:3000"
