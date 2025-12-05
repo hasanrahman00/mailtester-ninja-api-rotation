@@ -8,10 +8,12 @@ The service runs continuously, performing scheduled maintenance jobs (window res
 
 - **Multiple key support:** register as many MailTester subscriptions as you like and load-balance requests automatically.
 - **Rate limiting:** enforces per-30-second and per-day limits for both Pro and Ultimate plans directly in MongoDB.
+- **Rate limiting:** enforces per-30-second, per-day, and per-request spacing limits for both Pro and Ultimate plans directly in MongoDB.
 - **Usage tracking & persistence:** stores counters, statuses, and plan metadata in MongoDB for durability.
 - **`.env` watcher + health checker:** keeps runtime keys in sync with the `.env` file and removes dead keys automatically.
 - **BullMQ-powered queue:** buffers bursts of `/key/available` requests in Redis so callers wait their turn instead of being rejected while keys cool down.
 - **REST API:** obtain an available key, inspect status, add/remove keys, and push validation telemetry for analytics.
+- **Client-facing rate metadata:** `/key/available`, `/status`, and `/limits` expose `avgRequestIntervalMs`, `lastUsed`, and `nextRequestAllowedAt` so callers know exactly when a key may be reused.
 - **Structured logging & graceful shutdown:** consistent JSON logging with clean teardown of schedulers, watchers, and DB connections.
 
 ## Project structure
@@ -83,7 +85,11 @@ Enqueues the caller inside a BullMQ queue, then returns the next available MailT
 ```json
 {
    "subscriptionId": "sub_abc123",
-   "plan": "ultimate"
+   "plan": "ultimate",
+   "avgRequestIntervalMs": 176,
+   "lastUsed": 1700000000000,
+   "nextRequestAllowedAt": 1700000000176,
+   "nextRequestInMs": 0
 }
 ```
 
@@ -92,6 +98,10 @@ Use the returned `subscriptionId` directly when calling `https://happy.mailteste
 ### `GET /status`
 
 Lists every key along with current counters, plan, status, rate limits, and timestamps as stored in MongoDB.
+
+### `GET /limits`
+
+Returns only the rate-limit metadata for each key (`plan`, `rateLimit30s`, `dailyLimit`, `avgRequestIntervalMs`, `lastUsed`, `nextRequestAllowedAt`) so that external services can plan their request cadence without fetching the full status payload.
 
 ### `POST /keys`
 

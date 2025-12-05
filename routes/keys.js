@@ -41,7 +41,18 @@ router.get('/key/available', async (req, res) => {
     const key = KEY_QUEUE_REQUEST_TIMEOUT_MS > 0
       ? await job.waitUntilFinished(keyQueueEvents, KEY_QUEUE_REQUEST_TIMEOUT_MS)
       : await job.waitUntilFinished(keyQueueEvents);
-    return res.json(key);
+    if (!key) {
+      return res.status(503).json({ status: 'wait', message: 'No keys available' });
+    }
+    const nextReadyInMs = Math.max((key.nextRequestAllowedAt || 0) - Date.now(), 0);
+    return res.json({
+      subscriptionId: key.subscriptionId,
+      plan: key.plan,
+      avgRequestIntervalMs: key.avgRequestIntervalMs,
+      lastUsed: key.lastUsed,
+      nextRequestAllowedAt: key.nextRequestAllowedAt,
+      nextRequestInMs: nextReadyInMs
+    });
   } catch (err) {
     if (err && err.message) {
       if (err.message.includes('timed out')) {
@@ -67,6 +78,16 @@ router.get('/status', async (req, res) => {
     return res.json(status);
   } catch (err) {
     logger.error({ msg: 'Error in /status', error: err.message });
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/limits', async (_req, res) => {
+  try {
+    const limits = await keyManager.getKeyLimits();
+    return res.json(limits);
+  } catch (err) {
+    logger.error({ msg: 'Error in /limits', error: err.message });
     return res.status(500).json({ error: 'Internal server error' });
   }
 });

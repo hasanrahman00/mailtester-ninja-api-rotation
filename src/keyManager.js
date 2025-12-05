@@ -191,6 +191,9 @@ async function registerKey(subscriptionId, plan) {
       dailyLimit: limits.dailyLimit,
       avgRequestIntervalMs: limits.avgRequestIntervalMs
     };
+    if (typeof existing.lastUsed !== 'number') {
+      updates.lastUsed = 0;
+    }
     await collection.updateOne(
       { subscriptionId },
       { $set: updates, $unset: { token: '', lastRefresh: '' } }
@@ -221,6 +224,27 @@ async function getAllKeysStatus() {
   return docs.map(({ _id, token, lastRefresh, ...rest }) => rest);
 }
 
+async function getKeyLimits() {
+  const collection = await getKeysCollection();
+  const docs = await collection
+    .find({}, {
+      projection: {
+        _id: 0,
+        subscriptionId: 1,
+        plan: 1,
+        rateLimit30s: 1,
+        dailyLimit: 1,
+        avgRequestIntervalMs: 1,
+        lastUsed: 1
+      }
+    })
+    .toArray();
+  return docs.map((doc) => ({
+    ...doc,
+    nextRequestAllowedAt: (doc.lastUsed || 0) + (doc.avgRequestIntervalMs || 0)
+  }));
+}
+
 /**
  * Determine the next available key.  Keys that are banned or exhausted or
  * outside their 30-second window are ignored.  The candidate with the lowest
@@ -248,6 +272,9 @@ async function getAvailableKey() {
       const dayExpired = now - doc.dayStart >= DAY_MS;
       const windowCount = windowExpired ? 0 : doc.usedInWindow || 0;
       const dayCount = dayExpired ? 0 : doc.usedDaily || 0;
+      const avgInterval = Number(doc.avgRequestIntervalMs) || Math.floor(WINDOW_MS / Math.max(doc.rateLimit30s || 1, 1));
+      const lastUsed = typeof doc.lastUsed === 'number' ? doc.lastUsed : 0;
+      const spacingExpired = avgInterval <= 0 || now - lastUsed >= avgInterval;
 
       if (!dayExpired && dayCount >= doc.dailyLimit) {
         await collection.updateOne({ subscriptionId: doc.subscriptionId }, { $set: { status: 'exhausted' } });
@@ -256,13 +283,17 @@ async function getAvailableKey() {
       if (!windowExpired && windowCount >= doc.rateLimit30s) {
         continue;
       }
+      if (!spacingExpired) {
+        continue;
+      }
 
       candidates.push({
         doc,
         windowExpired,
         dayExpired,
         windowCount,
-        dayCount
+        dayCount,
+        avgInterval
       });
     }
 
@@ -273,7 +304,7 @@ async function getAvailableKey() {
     candidates.sort((a, b) => a.windowCount - b.windowCount);
 
     for (const candidate of candidates) {
-      const { doc } = candidate;
+      const { doc, avgInterval } = candidate;
       const attemptTime = Date.now();
       const nextWindowStart = candidate.windowExpired ? attemptTime : doc.windowStart;
       const nextDayStart = candidate.dayExpired ? attemptTime : doc.dayStart;
@@ -297,6 +328,7 @@ async function getAvailableKey() {
           usedDaily: newDayCount,
           dayStart: nextDayStart,
           lastUsed: attemptTime,
+          avgRequestIntervalMs: avgInterval,
           status: willExhaust ? 'exhausted' : 'active'
         }
       };
@@ -306,7 +338,10 @@ async function getAvailableKey() {
       if (updatedDoc) {
         return {
           subscriptionId: updatedDoc.subscriptionId,
-          plan: updatedDoc.plan
+          plan: updatedDoc.plan,
+          avgRequestIntervalMs: updatedDoc.avgRequestIntervalMs,
+          lastUsed: updatedDoc.lastUsed,
+          nextRequestAllowedAt: updatedDoc.lastUsed + (updatedDoc.avgRequestIntervalMs || 0)
         };
       }
     }
@@ -363,6 +398,7 @@ module.exports = {
   registerKey,
   deleteKey,
   getAllKeysStatus,
+  getKeyLimits,
   getAvailableKey,
   resetWindowsForAll,
   resetDailyForAll
