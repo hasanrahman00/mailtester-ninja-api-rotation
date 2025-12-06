@@ -7,8 +7,7 @@ The service runs continuously, performing scheduled maintenance jobs (window res
 ## Features
 
 - **Multiple key support:** register as many MailTester subscriptions as you like and load-balance requests automatically.
-- **Rate limiting:** enforces per-30-second and per-day limits for both Pro and Ultimate plans directly in MongoDB.
-- **Rate limiting:** enforces per-30-second, per-day, and per-request spacing limits for both Pro and Ultimate plans directly in MongoDB.
+- **Rate limiting:** enforces per-30-second, per-day, and per-request spacing limits (default spacing 880 ms for Pro, 180 ms for Ultimate; override via `MAILTESTER_PRO_INTERVAL_MS` / `MAILTESTER_ULTIMATE_INTERVAL_MS`).
 - **Usage tracking & persistence:** stores counters, statuses, and plan metadata in MongoDB for durability.
 - **`.env` watcher + health checker:** keeps runtime keys in sync with the `.env` file and removes dead keys automatically.
 - **BullMQ-powered queue:** buffers bursts of `/key/available` requests in Redis so callers wait their turn instead of being rejected while keys cool down.
@@ -57,6 +56,11 @@ mailtester-ninja-api-rotation/
    - `KEY_QUEUE_MAX_WAIT_MS` – max time (ms) a worker retries before giving up; set `0`/unset (default) to wait indefinitely.
    - `KEY_QUEUE_REQUEST_TIMEOUT_MS` – optional HTTP wait timeout (ms). Leave unset/`0` to keep the connection open until a key is available.
 
+   **MailTester spacing overrides (optional):**
+
+   - `MAILTESTER_PRO_INTERVAL_MS` – override the default 880 ms spacing for Pro keys.
+   - `MAILTESTER_ULTIMATE_INTERVAL_MS` – override the default 180 ms spacing for Ultimate keys.
+
    **Preloading keys** (set *one* input source, checked in the order shown):
 
    1. `MAILTESTER_KEYS_JSON` – JSON array of `{ id, plan }` objects.
@@ -86,9 +90,9 @@ Enqueues the caller inside a BullMQ queue, then returns the next available MailT
 {
    "subscriptionId": "sub_abc123",
    "plan": "ultimate",
-   "avgRequestIntervalMs": 176,
+   "avgRequestIntervalMs": 180,
    "lastUsed": 1700000000000,
-   "nextRequestAllowedAt": 1700000000176,
+   "nextRequestAllowedAt": 1700000000180,
    "nextRequestInMs": 0
 }
 ```

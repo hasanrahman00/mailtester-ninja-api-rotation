@@ -19,19 +19,39 @@ const mongoClient = require('./mongoClient');
 const WINDOW_MS = 30_000;
 const DAY_MS = 86_400_000;
 
+const PRO_RATE_LIMIT_30S = 35;
+const PRO_DAILY_LIMIT = 100_000;
+const PRO_DEFAULT_INTERVAL_MS = 880;
+const ULTIMATE_RATE_LIMIT_30S = 170;
+const ULTIMATE_DAILY_LIMIT = 500_000;
+const ULTIMATE_DEFAULT_INTERVAL_MS = 180;
+
+function resolveInterval(overrideValue, fallback) {
+  if (typeof overrideValue === 'number' && Number.isFinite(overrideValue) && overrideValue > 0) {
+    return Math.floor(overrideValue);
+  }
+  return fallback;
+}
+
 // Internal helper: compute rate limits based on plan
 function getRateLimits(plan) {
   const normalized = String(plan || '').toLowerCase();
   if (normalized === 'pro') {
-    const rateLimit30s = 35;
-    const dailyLimit = 100000;
-    const avgRequestIntervalMs = Math.floor((30 * 1000) / rateLimit30s);
+    const rateLimit30s = PRO_RATE_LIMIT_30S;
+    const dailyLimit = PRO_DAILY_LIMIT;
+    const avgRequestIntervalMs = resolveInterval(
+      Number(process.env.MAILTESTER_PRO_INTERVAL_MS),
+      PRO_DEFAULT_INTERVAL_MS
+    );
     return { rateLimit30s, dailyLimit, avgRequestIntervalMs };
   }
   // default to ultimate
-  const rateLimit30s = 170;
-  const dailyLimit = 500000;
-  const avgRequestIntervalMs = Math.floor((30 * 1000) / rateLimit30s);
+  const rateLimit30s = ULTIMATE_RATE_LIMIT_30S;
+  const dailyLimit = ULTIMATE_DAILY_LIMIT;
+  const avgRequestIntervalMs = resolveInterval(
+    Number(process.env.MAILTESTER_ULTIMATE_INTERVAL_MS),
+    ULTIMATE_DEFAULT_INTERVAL_MS
+  );
   return { rateLimit30s, dailyLimit, avgRequestIntervalMs };
 }
 
