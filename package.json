@@ -2,7 +2,7 @@
   "name": "mailtester-key-manager",
   "version": "1.0.0",
   "description": "MailTester Key Manager Microservice",
-  "main": "apiServer.js",
+  "main": "server.js",
   "scripts": {
     "start": "node -r dotenv/config server.js dotenv_config_path=./.env",
     "dev": "nodemon -r dotenv/config server.js dotenv_config_path=./.env",
