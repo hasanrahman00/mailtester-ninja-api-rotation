@@ -7,7 +7,7 @@ The service runs continuously, performing scheduled maintenance jobs (window res
 ## Features
 
 - **Multiple key support:** register as many MailTester subscriptions as you like and load-balance requests automatically.
-- **Rate limiting:** enforces per-30-second, per-day, and per-request spacing limits (default spacing 880 ms for Pro, 180 ms for Ultimate; override via `MAILTESTER_PRO_INTERVAL_MS` / `MAILTESTER_ULTIMATE_INTERVAL_MS`).
+- **Rate limiting:** enforces per-30-second, per-day, and per-request spacing limits (default spacing 860 ms for Pro, 170 ms for Ultimate; override via `MAILTESTER_PRO_INTERVAL_MS` / `MAILTESTER_ULTIMATE_INTERVAL_MS`).
 - **Usage tracking & persistence:** stores counters, statuses, and plan metadata in MongoDB for durability.
 - **`.env` watcher + health checker:** keeps runtime keys in sync with the `.env` file and removes dead keys automatically.
 - **BullMQ-powered queue:** buffers bursts of `/key/available` requests in Redis so callers wait their turn instead of being rejected while keys cool down.
@@ -58,14 +58,14 @@ mailtester-ninja-api-rotation/
 
    **MailTester spacing overrides (optional):**
 
-   - `MAILTESTER_PRO_INTERVAL_MS` – override the default 880 ms spacing for Pro keys.
-   - `MAILTESTER_ULTIMATE_INTERVAL_MS` – override the default 180 ms spacing for Ultimate keys.
+   - `MAILTESTER_PRO_INTERVAL_MS` – override the default 860 ms spacing for Pro keys.
+   - `MAILTESTER_ULTIMATE_INTERVAL_MS` – override the default 170 ms spacing for Ultimate keys.
 
    **Preloading keys** (set *one* input source, checked in the order shown):
 
    1. `MAILTESTER_KEYS_JSON` – JSON array of `{ id, plan }` objects.
    2. `MAILTESTER_KEYS_JSON_PATH` – path to the JSON file described above.
-   3. `MAILTESTER_KEYS_WITH_PLAN` – comma separated `id:plan` entries.
+   3. `MAILTESTER_KEYS_WITH_PLAN` – comma separated `id:plan` entries (e.g. `sub_pro_id:pro,sub_unlimited_id:ultimate`).
    4. `MAILTESTER_KEYS` – comma separated IDs; requires `MAILTESTER_DEFAULT_PLAN`.
 
    Plans accept `pro` or `ultimate` (case-insensitive). The `.env` watcher replays the same parsing logic to keep MongoDB updated at runtime.
@@ -84,20 +84,35 @@ All endpoints return JSON and live at the root path.
 
 ### `GET /key/available`
 
-Enqueues the caller inside a BullMQ queue, then returns the next available MailTester key while atomically incrementing its usage counters in MongoDB. If you configure an HTTP timeout and it elapses while every key is still cooling down, the route responds with `429 { status: "wait" }`; otherwise the connection remains open until a key frees up.
+Returns a single reserved MailTester key while atomically incrementing its usage counters in MongoDB. If no key is currently available, the route responds with `status: "wait"` and a `waitMs` hint (the smaller of the Pro/Ultimate average interval settings).
 
 ```json
 {
-   "subscriptionId": "sub_abc123",
-   "plan": "ultimate",
-   "avgRequestIntervalMs": 180,
-   "lastUsed": 1700000000000,
-   "nextRequestAllowedAt": 1700000000180,
-   "nextRequestInMs": 0
+   "status": "ok",
+   "key": {
+      "subscriptionId": "sub_abc123",
+      "plan": "ultimate",
+      "avgRequestIntervalMs": 170,
+      "lastUsed": 1700000000000,
+      "nextRequestAllowedAt": 1700000000170
+   }
 }
 ```
 
+```json
+{
+   "status": "wait",
+   "waitMs": 170
+}
+```
+
+Clients should respect `avgRequestIntervalMs` and `nextRequestAllowedAt` before reusing a key.
+
 Use the returned `subscriptionId` directly when calling `https://happy.mailtester.ninja/ninja`.
+
+### `GET /key/available/queued`
+
+Enqueues the caller inside a BullMQ queue and waits for the next available key. If `KEY_QUEUE_REQUEST_TIMEOUT_MS` is set and the wait exceeds the timeout, the route responds with `429 { "status": "wait", "waitMs": <hint> }`.
 
 ### `GET /status`
 
@@ -160,7 +175,12 @@ const axios = require('axios');
 
 async function run() {
   const { data } = await axios.get('http://localhost:3000/key/available');
-   const response = await axios.get(`https://happy.mailtester.ninja/ninja?email=test@example.com&key=${data.subscriptionId}`);
+    if (data.status !== 'ok') {
+       throw new Error(`No key available. Wait ${data.waitMs}ms`);
+    }
+    const response = await axios.get(
+       `https://happy.mailtester.ninja/ninja?email=test@example.com&key=${data.key.subscriptionId}`
+    );
   console.log(response.data);
 }
 

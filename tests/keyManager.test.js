@@ -154,7 +154,7 @@ test('registerKey stores avg interval and lastUsed metadata', async () => {
   assert.equal(status.length, 1);
   const [doc] = status;
   assert.equal(doc.subscriptionId, 'sub_pro_test');
-  assert.equal(doc.avgRequestIntervalMs, 880);
+  assert.equal(doc.avgRequestIntervalMs, 860);
   assert.equal(doc.lastUsed, 0);
 });
 

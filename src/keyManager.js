@@ -21,10 +21,10 @@ const DAY_MS = 86_400_000;
 
 const PRO_RATE_LIMIT_30S = 35;
 const PRO_DAILY_LIMIT = 100_000;
-const PRO_DEFAULT_INTERVAL_MS = 880;
+const PRO_DEFAULT_INTERVAL_MS = 860;
 const ULTIMATE_RATE_LIMIT_30S = 170;
 const ULTIMATE_DAILY_LIMIT = 500_000;
-const ULTIMATE_DEFAULT_INTERVAL_MS = 180;
+const ULTIMATE_DEFAULT_INTERVAL_MS = 170;
 
 function resolveInterval(overrideValue, fallback) {
   if (typeof overrideValue === 'number' && Number.isFinite(overrideValue) && overrideValue > 0) {

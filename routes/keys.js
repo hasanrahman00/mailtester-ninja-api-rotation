@@ -14,29 +14,71 @@
 
 const express = require('express');
 const keyManager = require('../src/keyManager');
+const { keyQueue, keyQueueEvents } = require('../src/keyQueue');
 const logger = require('../src/logger');
 
 const router = express.Router();
+const DEFAULT_PRO_INTERVAL_MS = 860;
+const DEFAULT_ULTIMATE_INTERVAL_MS = 170;
+
+function resolveIntervalMs(rawValue, fallback) {
+  const numeric = Number(rawValue);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return Math.floor(numeric);
+  }
+  return fallback;
+}
+
+function getDefaultWaitMs() {
+  const proInterval = resolveIntervalMs(
+    process.env.MAILTESTER_PRO_INTERVAL_MS,
+    DEFAULT_PRO_INTERVAL_MS
+  );
+  const ultimateInterval = resolveIntervalMs(
+    process.env.MAILTESTER_ULTIMATE_INTERVAL_MS,
+    DEFAULT_ULTIMATE_INTERVAL_MS
+  );
+  return Math.min(proInterval, ultimateInterval);
+}
+
 /**
  * GET /key/available
  *
- * Returns all available MailTester keys within rate limits. If none are
- * currently available the client receives an empty array with a status note.
+ * Returns a single reserved MailTester key within rate limits. If none are
+ * currently available the client receives a wait hint.
  */
-router.get('/key/available', async (req, res) => {
+router.get('/key/available', async (_req, res) => {
   try {
-    const keys = await keyManager.getAvailableKeysSnapshot();
-    const now = Date.now();
-    const payload = keys.map((key) => ({
-      ...key,
-      nextRequestInMs: Math.max((key.nextRequestAllowedAt || 0) - now, 0)
-    }));
-    if (!payload.length) {
-      return res.json({ status: 'wait', keys: [] });
+    const key = await keyManager.getAvailableKey();
+    if (!key) {
+      return res.json({ status: 'wait', waitMs: getDefaultWaitMs() });
     }
-    return res.json({ status: 'ok', keys: payload });
+    return res.json({ status: 'ok', key });
   } catch (err) {
     logger.error({ msg: 'Error in /key/available', error: err?.message || err });
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * GET /key/available/queued
+ *
+ * Enqueues the caller to wait for the next available key.
+ */
+router.get('/key/available/queued', async (_req, res) => {
+  try {
+    const timeoutMs = Number(process.env.KEY_QUEUE_REQUEST_TIMEOUT_MS || 0);
+    const waitTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : undefined;
+
+    const job = await keyQueue.add('key-request', {}, { removeOnComplete: true, removeOnFail: true });
+    const key = await job.waitUntilFinished(keyQueueEvents, waitTimeout);
+    return res.json({ status: 'ok', key });
+  } catch (err) {
+    const message = err?.message || String(err);
+    if (message.includes('QUEUE_TIMEOUT') || message.toLowerCase().includes('timed out')) {
+      return res.status(429).json({ status: 'wait', waitMs: getDefaultWaitMs() });
+    }
+    logger.error({ msg: 'Error in /key/available/queued', error: message });
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
